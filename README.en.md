@@ -162,3 +162,10 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md).
 ## License
 
 [Apache License 2.0](./LICENSE) © 2026 fattank
+
+## Contact
+
+- WeChat: scan the QR code below (please mention "DRG" when adding)
+- Issues & feedback: [GitHub Issues](https://github.com/fattank/chs-drg-mcp/issues)
+
+<img src="./assets/wechat-qrcode.png" alt="WeChat QR code" width="260" />

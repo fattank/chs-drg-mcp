@@ -180,3 +180,10 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 ## 许可证
 
 [Apache License 2.0](./LICENSE) © 2026 fattank
+
+## 联系方式
+
+- 微信：扫描下方二维码添加（请备注「DRG」）
+- 问题与建议：[GitHub Issues](https://github.com/fattank/chs-drg-mcp/issues)
+
+<img src="./assets/wechat-qrcode.png" alt="微信二维码" width="260" />
