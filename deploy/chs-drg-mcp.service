@@ -1,0 +1,30 @@
+[Unit]
+Description=CHS-DRG MCP Server
+Documentation=https://github.com/fattank/chs-drg-mcp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/chs-drg-mcp
+Environment=NODE_ENV=production
+# 上游 DRG 分组服务地址（按需修改）
+Environment=DRG_API_BASE=http://127.0.0.1:4173
+Environment=DRG_API_TIMEOUT_MS=20000
+# 由 Nginx 终止 TLS 时，仅监听本机
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=4174
+# 公开部署建议启用鉴权（取消注释并改成强随机串）
+# Environment=DRG_MCP_AUTH_TOKEN=change-me-to-a-long-random-token
+ExecStart=/usr/bin/env node mcp-server.mjs
+Restart=always
+RestartSec=3
+# 以非 root 运行更安全，按需修改
+User=nobody
+Group=nogroup
+LimitNOFILE=65535
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

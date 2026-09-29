@@ -1,0 +1,16 @@
+node_modules/
+npm-debug.log*
+yarn-error.log*
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+*.crt
+certs/
+logs/
+*.log
+coverage/
+.idea/
+.vscode/
+tmp/

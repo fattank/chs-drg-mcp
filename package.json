@@ -1,0 +1,49 @@
+{
+  "name": "chs-drg-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for CHS-DRG 2.0/3.0 deterministic DRG grouping of Chinese inpatient medical records. Works with WorkBuddy, CodeBuddy, Claude, Cursor and any MCP client.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "author": "fattank",
+  "homepage": "https://github.com/fattank/chs-drg-mcp#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fattank/chs-drg-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fattank/chs-drg-mcp/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "drg",
+    "chs-drg",
+    "dip",
+    "medical-insurance",
+    "healthcare",
+    "icd-10",
+    "icd-9-cm-3",
+    "workbuddy",
+    "codebuddy"
+  ],
+  "bin": {
+    "chs-drg-mcp": "./mcp-server.mjs"
+  },
+  "files": [
+    "mcp-server.mjs",
+    "src",
+    "deploy",
+    "docs",
+    "README.md",
+    "README.en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node mcp-server.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
