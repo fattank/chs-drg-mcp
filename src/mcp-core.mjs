@@ -3,7 +3,7 @@ import { TOOLS } from "./tools.mjs";
 export const SERVER_INFO = {
   name: "chs-drg-grouper",
   title: "CHS-DRG 2.0/3.0 分组服务",
-  version: "1.1.0",
+  version: "1.1.1",
   websiteUrl: "http://47.109.152.150:4173"
 };
 
