@@ -1,6 +1,10 @@
 // 只负责调用远端分组服务，不包含任何分组算法。
 // 算法与规则数据全部留在服务器（默认 127.0.0.1:4173），本连接器仅做协议转换。
 
+// 调用上游时带的来源标记，便于分组服务的访问日志区分是哪个连接器转发过来的。
+// 不包含任何调用方隐私信息，只是连接器自身的名字。
+const CLIENT_ID = process.env.DRG_CLIENT_ID || "chs-drg-mcp";
+
 function base() {
   return (process.env.DRG_API_BASE || "http://127.0.0.1:4173").replace(/\/+$/, "");
 }
@@ -29,7 +33,10 @@ async function call(pathname, { method = "GET", body } = {}) {
   try {
     const response = await fetch(`${base()}${pathname}`, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        "X-DRG-Client": CLIENT_ID,
+        ...(body ? { "Content-Type": "application/json" } : {})
+      },
       body: body ? JSON.stringify(body) : undefined,
       signal: controller.signal
     });
@@ -61,3 +68,14 @@ export const health = () => call("/api/health");
 export const meta = () => call("/api/meta");
 export const searchCode = (type, query, limit = 20) =>
   call(`/api/search?type=${encodeURIComponent(type)}&q=${encodeURIComponent(query)}&limit=${encodeURIComponent(limit)}`);
+export const mappingMeta = () => call("/api/mapping/meta");
+export const mappingQuery = ({ kind = "diagnosis", query = "", gray = false, page = 1, pageSize = 50 } = {}) => {
+  const params = new URLSearchParams({
+    kind: kind === "procedure" ? "procedure" : "diagnosis",
+    page: String(Number.isFinite(Number(page)) && Number(page) > 0 ? Math.floor(Number(page)) : 1),
+    pageSize: String(Math.min(200, Math.max(1, Number(pageSize) || 50)))
+  });
+  if (query) params.set("q", String(query).trim());
+  if (gray) params.set("gray", "1");
+  return call(`/api/mapping?${params.toString()}`);
+};

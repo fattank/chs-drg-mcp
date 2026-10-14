@@ -91,6 +91,7 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 | `drg_group_case` | CHS-DRG 3.0 grouping for a single case | `principalDiagnosis` |
 | `drg_compare_versions` | CHS-DRG 2.0 / 3.0 comparison | `principalDiagnosis` |
 | `drg_group_batch` | CHS-DRG 3.0 batch grouping (≤ 10 cases) | `cases[].principalDiagnosis` |
+| `drg_mapping_query` | National-clinical → insurance code mapping (incl. insurance "gray" codes) | — |
 | `drg_search_code` | Diagnosis / procedure code search | `query` |
 | `drg_service_info` | Service status and rule versions | — |
 

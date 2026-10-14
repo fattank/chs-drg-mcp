@@ -3,7 +3,7 @@ import { TOOLS } from "./tools.mjs";
 export const SERVER_INFO = {
   name: "chs-drg-grouper",
   title: "CHS-DRG 2.0/3.0 分组服务",
-  version: "1.0.0",
+  version: "1.1.0",
   websiteUrl: "http://47.109.152.150:4173"
 };
 
@@ -15,6 +15,7 @@ const INSTRUCTIONS = [
   "本服务提供中国国家医保局 CHS-DRG 2.0 / 3.0 的病案分组能力。",
   "调用分组工具时，请提供病案首页编码：主要诊断编码必填；有手术时填主要手术或操作编码；涉及新生儿、CC/MCC、性别或年龄细分时，补充 sex、ageYears、ageDays、入院/出生体重等字段。",
   "返回 status 为 grouped 时 result.drg 才是确定结果；needs-data 需补充字段；invalid/ungrouped/review 请阅读 errors、needs、warnings。",
+  "输入为国临版编码时，设置 useMapping=true 先映射为医保版再分组；可用 drg_mapping_query 查询对照表，医保版『灰码』会在结果中标注。",
   "工具只返回分组结果与依据，不提供任何支付标准或费用结算金额。"
 ].join("\n");
 

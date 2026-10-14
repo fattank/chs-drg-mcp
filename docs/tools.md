@@ -12,9 +12,9 @@
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `principalDiagnosis` | string | ✅ | 主要诊断编码（医保版 ICD-10） |
+| `principalDiagnosis` | string | ✅ | 主要诊断编码。医保版 ICD-10，或国临版（配合 `useMapping=true`） |
 | `otherDiagnoses` | string[] | | 其他诊断编码 |
-| `principalProcedure` | string | | 主要手术或操作编码（医保版 ICD-9-CM-3） |
+| `principalProcedure` | string | | 主要手术或操作编码。医保版 ICD-9-CM-3，或国临版（配合 `useMapping=true`） |
 | `otherProcedures` | string[] | | 其他手术或操作编码 |
 | `sex` | `M` / `F` | | 性别 |
 | `ageYears` | number | | 周岁 |
@@ -23,9 +23,10 @@
 | `admissionWeightGrams` | integer | | 入院体重（克），3.0 早产儿分组使用 |
 | `ventilationHours` | number | | 呼吸机使用时长（小时） |
 | `dischargeDisposition` | string | | 离院方式 |
+| `useMapping` | boolean | | 是否先用「国临版→医保版」对照表映射诊断/手术编码再分组；国临版输入设为 `true` |
 | `caseId` | string | | 病案标识 |
 
-**返回**：`status`、`result`（`mdc`/`adrg`/`drg`/`severity`/`basicGroup`）、`needs`、`errors`、`warnings`、`trace`、精简 `ruleSet`。
+**返回**：`status`、`result`（`mdc`/`adrg`/`drg`/`severity`/`basicGroup`）、`needs`、`errors`、`warnings`、`trace`、精简 `ruleSet`；启用映射时另含 `mapping`（映射表信息、改变编码数、医保灰码数）与 `mappingTrace`（逐条 `原码→目标码`、`gray` 标记）。
 
 **示例**
 
@@ -99,6 +100,35 @@
 
 ---
 
+## `drg_mapping_query`
+
+查询「国临版→医保版」对照表，用于把国临版病案编码映射为医保版后再分组，并可识别医保版『灰码』。
+
+**输入**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `kind` | `diagnosis` / `procedure` | | 对照表类型，默认 `diagnosis`（诊断 ICD-10）；`procedure` 为手术操作 ICD-9 |
+| `query` | string | | 国临码 / 医保码 / 名称关键词，可留空 |
+| `grayOnly` | boolean | | 为 `true` 时只返回医保灰码 |
+| `page` | integer | | 页码，从 1 开始，默认 1 |
+| `pageSize` | integer | | 每页条数，1–200，默认 50 |
+
+**返回**：`kind`、`total`、`page`、`pages`、`items[]`（`source` / `sourceName` / `target` / `targetName` / `changed` / `gray`）。
+
+**示例**
+
+```json
+{ "name": "drg_mapping_query", "arguments": { "kind": "diagnosis", "query": "A01.000x003" } }
+```
+
+```text
+映射类型：诊断；命中 1 条，第 1/1 页
+A01.000x003+G01* → A01.002+G01*  伤寒并发脑膜炎
+```
+
+---
+
 ## `drg_search_code`
 
 在 2.0 / 3.0 数据表中按编码或名称关键词检索医保版诊断、手术操作编码。
@@ -120,7 +150,7 @@
 
 **输入**：无。
 
-**返回**：上游地址、`health`、`meta`（`version` / `architecture` / `counts` / `limitations`）。
+**返回**：上游地址、`health`、`meta`（`version` / `architecture` / `counts` / `limitations`）、`mapping`（诊断/手术两张对照表的规模、方向与医保灰码数）。
 
 ---
 

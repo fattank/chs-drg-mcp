@@ -5,13 +5,13 @@ import * as drg from "./drg-client.mjs";
 // ---------------------------------------------------------------------------
 const CASE_PROPERTIES = {
   caseId: { type: "string", description: "病案标识，可选，例如 2026-0001" },
-  principalDiagnosis: { type: "string", description: "主要诊断编码（医保版 ICD-10），必填，例如 E10.300x051+H42.0*" },
+  principalDiagnosis: { type: "string", description: "主要诊断编码，必填。医保版 ICD-10，或国临版（配合 useMapping=true），例如 E10.300x051+H42.0*" },
   otherDiagnoses: {
     type: "array",
     items: { type: "string" },
     description: "其他诊断编码列表，例如 [\"I10.x00\",\"E11.900\"]"
   },
-  principalProcedure: { type: "string", description: "主要手术或操作编码（医保版 ICD-9-CM-3），无手术可留空，例如 39.9500x007" },
+  principalProcedure: { type: "string", description: "主要手术或操作编码，无手术可留空。医保版 ICD-9-CM-3，或国临版（配合 useMapping=true），例如 39.9500x007" },
   otherProcedures: {
     type: "array",
     items: { type: "string" },
@@ -23,7 +23,11 @@ const CASE_PROPERTIES = {
   birthWeightGrams: { type: "integer", description: "出生体重（克），CHS-DRG 2.0 早产儿分组使用" },
   admissionWeightGrams: { type: "integer", description: "入院体重（克），CHS-DRG 3.0 早产儿分组使用" },
   ventilationHours: { type: "number", description: "呼吸机使用时长（小时）" },
-  dischargeDisposition: { type: "string", description: "离院方式，例如 医嘱离院、死亡" }
+  dischargeDisposition: { type: "string", description: "离院方式，例如 医嘱离院、死亡" },
+  useMapping: {
+    type: "boolean",
+    description: "是否先用「国临版→医保版」对照表把诊断/手术编码映射为医保版再分组（规则表优先、映射兜底、单跳）。输入为国临版编码时设为 true；医保版编码留空即可。"
+  }
 };
 
 function caseSchema() {
@@ -60,6 +64,7 @@ function buildPayload(args) {
   put("admissionWeightGrams", args.admissionWeightGrams);
   put("ventilationHours", args.ventilationHours);
   put("dischargeDisposition", args.dischargeDisposition);
+  if (args.useMapping === true) payload.useMapping = true;
   return payload;
 }
 
@@ -97,6 +102,15 @@ function summarizeCase(version, r) {
   if (r.needs?.length) lines.push(`  待补充信息：${r.needs.join("、")}`);
   if (r.errors?.length) lines.push(`  错误：${r.errors.map((e) => e.message).join("；")}`);
   if (r.warnings?.length) lines.push(`  提示：${r.warnings.map((w) => w.message).join("；")}`);
+  if (r.mapping?.enabled) {
+    const tables = (r.mapping.tables || []).map((t) => t.label).join("+");
+    lines.push(`  编码映射：已启用${tables ? `（${tables}）` : ""} · 改变编码 ${r.mapping.changedCount ?? 0} 个${r.mapping.grayCount ? ` · 医保灰码 ${r.mapping.grayCount} 个` : ""}`);
+    const traces = (r.mappingTrace || []).filter((entry) => entry.changed || entry.gray);
+    for (const entry of traces.slice(0, 8)) {
+      lines.push(`    · ${entry.label} ${entry.original} → ${entry.final}${entry.gray ? "（医保灰码）" : ""}`);
+    }
+    if (traces.length > 8) lines.push(`    · …… 另有 ${traces.length - 8} 条`);
+  }
   return lines.join("\n");
 }
 
@@ -114,6 +128,8 @@ function publicResult(r) {
     errors: r.errors ?? [],
     warnings: r.warnings ?? [],
     trace: (r.trace || []).map(({ title, status, detail }) => ({ title, status, detail })),
+    mapping: r.mapping ?? null,
+    mappingTrace: (r.mappingTrace || []).map(({ kind, label, original, final, changed, gray, action }) => ({ kind, label, original, final, changed, gray, action })),
     ruleSet: r.ruleSet
       ? { version: r.ruleSet.version, revision: r.ruleSet.revision, engineRevision: r.ruleSet.engineRevision, sha256: r.ruleSet.sha256 }
       : null
@@ -128,7 +144,7 @@ export const TOOLS = [
     name: "drg_group_case",
     title: "CHS-DRG 3.0 单病例分组",
     description:
-      "按国家医保局 CHS-DRG 3.0（A 型）规则对单个住院病案首页做确定性分组，返回 MDC、ADRG、DRG、严重度、分组状态与分组依据。",
+      "按国家医保局 CHS-DRG 3.0（A 型）规则对单个住院病案首页做确定性分组，返回 MDC、ADRG、DRG、严重度、分组状态与分组依据。支持国临版编码：设置 useMapping=true 时先做「国临版→医保版」映射再分组，并在结果中返回映射明细与医保灰码标记。",
     inputSchema: caseSchema(),
     async handler(args) {
       const data = await drg.groupCase(buildPayload(args));
@@ -139,7 +155,7 @@ export const TOOLS = [
     name: "drg_compare_versions",
     title: "CHS-DRG 2.0 / 3.0 双版本对照",
     description:
-      "把同一份病案分别按 CHS-DRG 2.0 与 3.0 独立规则分组，输出两版结果与差异对照，便于观察付费版本升级带来的分组变化。",
+      "把同一份病案分别按 CHS-DRG 2.0 与 3.0 独立规则分组，输出两版结果与差异对照，便于观察付费版本升级带来的分组变化。支持 useMapping=true 时先映射国临版编码。",
     inputSchema: caseSchema(),
     async handler(args) {
       const data = await drg.compareCase(buildPayload(args));
@@ -155,7 +171,7 @@ export const TOOLS = [
     name: "drg_group_batch",
     title: "CHS-DRG 3.0 批量分组",
     description:
-      "对最多 10 份病案批量执行 CHS-DRG 3.0 分组，返回每份病案的状态与 DRG，适合清单式核对。",
+      "对最多 10 份病案批量执行 CHS-DRG 3.0 分组，返回每份病案的状态与 DRG，适合清单式核对。支持 useMapping（逐份）。",
     inputSchema: {
       type: "object",
       properties: {
@@ -183,6 +199,34 @@ export const TOOLS = [
       const grouped = results.filter((item) => item.status === "grouped").length;
       const text = [`共 ${results.length} 份，已确定分组 ${grouped} 份。`, ...results.map((item) => `#${item.index + 1} ${item.statusLabel}${item.adrg ? ` ${item.adrg}` : ""}${item.drg ? ` ${item.drg}` : ""}${item.errors?.length ? `（${item.errors.join("；")}）` : ""}`)].join("\n");
       return { text, json: { total: results.length, grouped, results } };
+    }
+  },
+  {
+    name: "drg_mapping_query",
+    title: "国临版→医保版编码映射查询",
+    description:
+      "查询「国临版→医保版」对照表（诊断 ICD-10 / 手术操作 ICD-9）。可按国临码/医保码/名称关键词检索，并识别医保版『灰码』（对照表中医保码带灰色标记）。用于把国临版病案编码映射到医保版后再分组。",
+    inputSchema: {
+      type: "object",
+      properties: {
+        kind: { type: "string", enum: ["diagnosis", "procedure"], description: "diagnosis 诊断（默认），procedure 手术操作" },
+        query: { type: "string", description: "国临码/医保码/名称关键词，可留空" },
+        grayOnly: { type: "boolean", description: "仅为 true 时只返回医保灰码" },
+        page: { type: "integer", description: "页码，从 1 开始，默认 1" },
+        pageSize: { type: "integer", description: "每页条数，1–200，默认 50" }
+      }
+    },
+    async handler(args) {
+      const kind = args.kind === "procedure" ? "procedure" : "diagnosis";
+      const data = await drg.mappingQuery({ kind, query: args.query, gray: args.grayOnly === true, page: args.page, pageSize: args.pageSize });
+      const items = data.items || [];
+      const text = items.length
+        ? items.map((item) => `${item.source} → ${item.target}${item.gray ? "  【医保灰码】" : ""}  ${item.sourceName}`).join("\n")
+        : "未找到匹配的映射记录。";
+      return {
+        text: `映射类型：${kind === "procedure" ? "手术操作" : "诊断"}；命中 ${data.total ?? items.length} 条，第 ${data.page ?? 1}/${data.pages ?? 1} 页\n${text}`,
+        json: data
+      };
     }
   },
   {
@@ -223,12 +267,22 @@ export const TOOLS = [
       "查询 DRG 分组服务运行状态、已加载的 2.0 / 3.0 规则版本、编码表规模与已知待核实口径，用于确认数据版本与合规边界。",
     inputSchema: { type: "object", properties: {} },
     async handler() {
-      const [health, meta] = await Promise.all([drg.health(), drg.meta()]);
+      const [health, meta, mapping] = await Promise.all([
+        drg.health(),
+        drg.meta(),
+        drg.mappingMeta().catch(() => null)
+      ]);
+      const mappingLines = mapping
+        ? ["diagnosis", "procedure"]
+            .filter((key) => mapping[key])
+            .map((key) => `编码映射(${mapping[key].label})：${mapping[key].direction} · ${mapping[key].rows} 行 · 医保灰码 ${mapping[key].grayRows} 条`)
+        : [];
       const text = [
         `服务状态：${health.ok ? "正常" : "异常"}`,
         ...(health.versions || []).map(
           (v) => `CHS-DRG ${v.version}：MDC ${v.counts.mdcs}、ADRG ${v.counts.adrgs}、DRG ${v.counts.drgs}，规则修订 ${v.ruleSet?.revision ?? "未标注"}`
         ),
+        ...mappingLines,
         `分组架构：${meta.architecture}`,
         ...(meta.limitations?.length ? ["已知待核实项：", ...meta.limitations.map((item) => `- ${item}`)] : [])
       ].join("\n");
@@ -237,7 +291,8 @@ export const TOOLS = [
         json: {
           base: drg.apiBase(),
           health,
-          meta: { version: meta.version, architecture: meta.architecture, counts: meta.counts, limitations: meta.limitations }
+          meta: { version: meta.version, architecture: meta.architecture, counts: meta.counts, limitations: meta.limitations },
+          mapping
         }
       };
     }

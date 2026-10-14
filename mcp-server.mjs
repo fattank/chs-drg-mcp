@@ -4,12 +4,36 @@ import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { handleMessage, toolsListing, SERVER_INFO } from "./src/mcp-core.mjs";
 import { apiBase } from "./src/drg-client.mjs";
+import { createAccessLogger, readClientInfo, summarizeRpc } from "./src/access-log.mjs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
+const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.MCP_PORT || process.env.PORT || 4174);
 const HOST = process.env.MCP_HOST || process.env.HOST || "0.0.0.0";
 const AUTH_TOKEN = process.env.DRG_MCP_AUTH_TOKEN || "";
 const MAX_BODY = 1024 * 1024;
 const sessions = new Map();
+// 会话 -> 客户端平台名。刻意与 sessions 分开存放：GET /mcp 的连接断开时会删掉 sessions 里的
+// 条目，如果平台名跟着一起删，这条会话的访问日志就会退化成 unknown。
+const clientInfoBySession = new Map();
+const CLIENT_INFO_LIMIT = 20000;
+
+function rememberClient(sessionId, info) {
+  if (!sessionId || !info) return;
+  clientInfoBySession.set(sessionId, info);
+  if (clientInfoBySession.size > CLIENT_INFO_LIMIT) {
+    const oldest = clientInfoBySession.keys().next().value;
+    clientInfoBySession.delete(oldest);
+  }
+}
+
+// 连接器访问日志：只有这里能看到真实调用方 IP 与 MCP 客户端平台名。
+// DRG_MCP_ACCESS_LOG=off 只关连接器；DRG_ACCESS_LOG=off 把分组器和连接器一起关掉。
+const accessLog = createAccessLogger({
+  directory: process.env.DRG_MCP_ACCESS_LOG_DIR || path.join(HERE, "logs"),
+  resolveClient: (sessionId) => clientInfoBySession.get(sessionId) || null
+});
 
 // ---------------------------------------------------------------------------
 // 通用工具
@@ -67,6 +91,9 @@ function startSseStream(response) {
     Connection: "keep-alive",
     "X-Accel-Buffering": "no"
   });
+  // 立刻把响应头发出去。否则要等到第一条数据（25 秒后的心跳）客户端才拿到响应头，
+  // 打开 GET /mcp 的 MCP 客户端会白等甚至超时。
+  try { response.flushHeaders(); } catch { /* 旧版本无此方法时忽略 */ }
   const ping = setInterval(() => {
     try {
       response.write(": ping\n\n");
@@ -82,6 +109,8 @@ function startSseStream(response) {
 // 传输：Streamable HTTP (/mcp) + 传统 HTTP+SSE (/sse + /messages)
 // ---------------------------------------------------------------------------
 async function handleRequest(request, response) {
+  // 入口即注册日志，异步落盘，不影响任何响应路径。
+  accessLog.attach(request, response);
   const url = new URL(request.url, `http://${request.headers.host || "localhost"}`);
   const { pathname } = url;
   const method = request.method || "GET";
@@ -126,7 +155,9 @@ async function handleRequest(request, response) {
       // 可选的服务端→客户端 SSE 流
       const sessionId = request.headers["mcp-session-id"] || randomUUID();
       const stopPing = startSseStream(response);
-      sessions.set(sessionId, { transport: "stream", response, createdAt: Date.now() });
+      // 合并写入：同一会话先 initialize 再开服务端流时，不能把已记录的 clientInfo 覆盖掉。
+      const existing = sessions.get(sessionId);
+      sessions.set(sessionId, { ...existing, transport: "stream", response, createdAt: existing?.createdAt ?? Date.now() });
       const cleanup = () => {
         stopPing();
         sessions.delete(sessionId);
@@ -137,7 +168,10 @@ async function handleRequest(request, response) {
     }
     if (method === "DELETE") {
       const sessionId = request.headers["mcp-session-id"];
-      if (sessionId) sessions.delete(sessionId);
+      if (sessionId) {
+        sessions.delete(sessionId);
+        clientInfoBySession.delete(sessionId);
+      }
       setCors(response);
       response.writeHead(204);
       return response.end();
@@ -152,17 +186,25 @@ async function handleRequest(request, response) {
       return json(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "JSON 解析失败" } });
     }
     const message = parsed.value;
+    const messages = Array.isArray(message) ? message : [message];
 
     let sessionId = request.headers["mcp-session-id"];
-    const isInitialize = !Array.isArray(message) && message?.method === "initialize";
-    if (isInitialize) {
+    // 批量数组里也可能带 initialize。
+    const initItem = messages.find((item) => item && typeof item === "object" && item.method === "initialize");
+    if (initItem) {
       if (!sessionId || !sessions.has(sessionId)) {
         sessionId = randomUUID();
         sessions.set(sessionId, { transport: "http", createdAt: Date.now() });
       }
+      // 记下客户端自报的平台名，供访问日志归因渠道（WorkBuddy / GitHub 等）。
+      rememberClient(sessionId, readClientInfo(initItem.params));
     }
 
+    // 先登记尝试次数：客户端中途断开、还没产出结果时，这条记录也要留下来（归入"未送达"）。
+    accessLog.noteAttempt(request, summarizeRpc(message, null));
     const result = await handleMessage(message);
+    // 再补上成功/失败计数：批量数组逐条累计，失败/未执行的调用单独计数。
+    accessLog.noteOutcome(request, summarizeRpc(message, result));
     if (sessionId) response.setHeader("Mcp-Session-Id", sessionId);
 
     const accept = String(request.headers["accept"] || "");
@@ -213,7 +255,16 @@ async function handleRequest(request, response) {
     const raw = await readBody(request);
     const parsed = parseJson(raw);
     if (parsed.error) return json(response, 400, { jsonrpc: "2.0", id: null, error: { code: -32700, message: "JSON 解析失败" } });
+    // SSE 通道下 initialize 走 /messages，同样记下客户端平台名。
+    const sseMessage = parsed.value;
+    const sseItems = Array.isArray(sseMessage) ? sseMessage : [sseMessage];
+    const sseInit = sseItems.find((item) => item && typeof item === "object" && item.method === "initialize");
+    if (sseInit) rememberClient(sessionId, readClientInfo(sseInit.params));
+    // 先登记尝试次数，再执行；中途断开也不会丢记录。
+    accessLog.noteAttempt(request, summarizeRpc(parsed.value, null));
     const result = await handleMessage(parsed.value);
+    // 记方法名与调用成败，批量数组逐条累计。
+    accessLog.noteOutcome(request, summarizeRpc(parsed.value, result));
     if (result !== null) {
       const items = Array.isArray(result) ? result : [result];
       for (const item of items) {
@@ -259,4 +310,15 @@ server.listen(PORT, HOST, () => {
   console.log(`  上游分组服务   : ${apiBase()}`);
   console.log(`  已加载工具     : ${toolsListing().map((tool) => tool.name).join(", ")}`);
   if (AUTH_TOKEN) console.log("  已启用 Bearer Token 鉴权");
+  console.log(accessLog.enabled
+    ? `  访问日志: ${accessLog.directory}（每天一个 access-YYYY-MM-DD.jsonl，仅本机可读）`
+    : "  访问日志: 已关闭");
 });
+
+for (const signal of ["SIGINT", "SIGTERM"]) {
+  process.on(signal, () => {
+    accessLog.close();
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000).unref();
+  });
+}

@@ -65,6 +65,7 @@
 | `drg_group_case` | CHS-DRG 3.0 单病例分组 |
 | `drg_compare_versions` | CHS-DRG 2.0 / 3.0 双版本对照 |
 | `drg_group_batch` | CHS-DRG 3.0 批量分组（≤ 10 份） |
+| `drg_mapping_query` | 国临版→医保版编码映射查询（含医保灰码） |
 | `drg_search_code` | 诊断 / 手术操作编码检索 |
 | `drg_service_info` | 服务状态与规则版本 |
 

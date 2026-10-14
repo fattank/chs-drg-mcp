@@ -92,6 +92,7 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 | `drg_group_case` | CHS-DRG 3.0 单病例分组 | `principalDiagnosis` |
 | `drg_compare_versions` | CHS-DRG 2.0 / 3.0 双版本对照 | `principalDiagnosis` |
 | `drg_group_batch` | CHS-DRG 3.0 批量分组（≤ 10 份） | `cases[].principalDiagnosis` |
+| `drg_mapping_query` | 国临版→医保版编码映射查询（含医保灰码） | 无（可按 `kind`/`query`/`grayOnly` 过滤） |
 | `drg_search_code` | 诊断 / 手术操作编码检索 | `query` |
 | `drg_service_info` | 服务状态与规则版本 | 无 |
 
@@ -101,9 +102,9 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
-| `principalDiagnosis` | string | **必填**，主要诊断编码（医保版 ICD-10），如 `E10.300x051+H42.0*` |
+| `principalDiagnosis` | string | **必填**，主要诊断编码。医保版 ICD-10，或国临版（配合 `useMapping=true`），如 `E10.300x051+H42.0*` |
 | `otherDiagnoses` | string[] | 其他诊断编码 |
-| `principalProcedure` | string | 主要手术或操作编码（医保版 ICD-9-CM-3） |
+| `principalProcedure` | string | 主要手术或操作编码。医保版 ICD-9-CM-3，或国临版（配合 `useMapping=true`） |
 | `otherProcedures` | string[] | 其他手术或操作编码 |
 | `sex` | `M` / `F` | 性别 |
 | `ageYears` | number | 周岁 |
@@ -112,6 +113,7 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 | `admissionWeightGrams` | integer | 入院体重（克），3.0 早产儿分组使用 |
 | `ventilationHours` | number | 呼吸机使用时长（小时） |
 | `dischargeDisposition` | string | 离院方式 |
+| `useMapping` | boolean | 是否先用「国临版→医保版」对照表映射诊断/手术编码再分组；国临版输入设为 `true` |
 | `caseId` | string | 病案标识（可选） |
 
 ## 使用示例
@@ -155,10 +157,42 @@ DRG_API_BASE=https://your-drg-service.example.com MCP_PORT=4174 node mcp-server.
 | `DRG_MCP_AUTH_TOKEN` | 空 | 设置后启用 `Authorization: Bearer <token>` 鉴权 |
 | `TLS_CERT` / `TLS_KEY` | 空 | 同时设置时以 HTTPS 启动 |
 
+## 访问日志（可选，默认开启）
+
+自托管时，连接器会记录自身收到的调用：时间、调用方 IP、每日轮换的访客ID、方法、路径、状态、耗时、User-Agent、会话ID，MCP 握手自报的客户端平台名（`clientInfo.name`），以及 JSON-RPC 的**方法名**（`initialize` / `tools/call` / `tools/list` …）与**调用成败计数**（`calls` / `callSuccesses` / `callFailures`）。
+
+**不记录 JSON-RPC 的 params 与正文**，因此不会落下任何病案内容；但日志**确实会保存调用方原始 IP、UA 和会话ID**，属于个人信息，请按需保留与清理。
+
+- 位置：`<连接器>/logs/access-YYYY-MM-DD.jsonl`；目录权限 `0700`，文件 `0600`，按天分文件。
+- 只落本机，连接器**未提供任何读取日志的接口**；`logs/` 已在 `.gitignore` 中忽略，不会随仓库分发。
+- 渠道归因：`workbuddy`（WorkBuddy / CodeBuddy 等）、`github`（Claude / Cursor 等）、`unknown`、`probe`（`/health` 探活扫描，不计入使用量）。规则是启发式的，改 `src/access-log.mjs` 里的 `classifyPlatform` 即可；日志同时保留平台原始名 `client`。
+- 平台名通过独立的会话表保存，**建立服务端流连接或断开都不会丢失归因**。
+- 调用上游时带 `X-DRG-Client` 标记头，便于上游分组服务的日志区分来源连接器。
+- **批量请求**（一个 JSON-RPC 数组里多次 `tools/call`）逐条累计，不会漏计；请求与响应按 id 的**原始类型**配对，同一批里 `id:1` 与 `id:"1"` 不会被合并。
+- **调用失败不算使用**：工具不存在返回 `-32602`、或 `result.isError` 为真时记入 `callFailures`；这类请求 HTTP 仍是 200，只看状态码会误判。响应未送达（断连，`status=0`）单独归为"未送达"。
+- **尝试次数在执行工具之前就登记**，所以客户端中途断开也会留下记录（归入"未送达"），不会整条丢失；没有 JSON-RPC 结果的请求（`/health` 探活、404）同样照常记录。
+- **写入本身是异步的**；只有新建/重建日志文件时才做一次**同步**可写性探测，持续故障时按 `DRG_ACCESS_LOG_RETRY_MS`（默认 5000ms）限流，不会每个请求都探测。故障排除后最多等一个冷却周期即自动重建，**无需重启**。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DRG_MCP_ACCESS_LOG` | 未设置 | **只要被显式设置就优先**：`off` 只关连接器，`on` 强制开启 |
+| `DRG_ACCESS_LOG` | 开 | 设为 `off` 时，若未显式设置 `DRG_MCP_ACCESS_LOG`，分组器与连接器一起关 |
+| `DRG_MCP_ACCESS_LOG_DIR` | `<连接器>/logs` | 日志目录 |
+| `DRG_MCP_ACCESS_LOG_TZ` | `Asia/Shanghai` | 分日时区 |
+| `DRG_ACCESS_LOG_RETRY_MS` | `5000` | 写入失败后同步探测的冷却时间 |
+| `DRG_MCP_TRUST_PROXY` | 关 | 位于 Nginx 等反向代理之后才开启 |
+| `DRG_ACCESS_SALT` | 自动生成 `logs/.salt` | 访客ID哈希盐 |
+| `DRG_CLIENT_ID` | `chs-drg-mcp` | 调用上游时携带的 `X-DRG-Client` 标记 |
+
+> 开关优先级实测：`DRG_ACCESS_LOG=off DRG_MCP_ACCESS_LOG=on` 时**连接器仍会记录**。
+> 想两头都关，设 `DRG_ACCESS_LOG=off` 且不要设置 `DRG_MCP_ACCESS_LOG`。启动横幅会打印实际状态。
+>
+> 统计口径：**只有调用成功的 `tools/call` 才算使用量**，握手、列工具、ping、404/鉴权失败与失败的调用都不计入。
+
 ## 安全与隐私
 
 - **不含算法**：本仓库不包含任何 DRG 分组规则、编码表或计算逻辑，分组在独立服务端完成。
-- **不存储病案**：连接器仅做内存中的请求转发，不落库、不记录病案正文。
+- **不存储病案**：连接器仅做内存中的请求转发，不落库、不记录病案正文；访问日志只写请求元数据（时间/IP/路径/状态/UA），不含请求体。
 - **最小数据**：只接收分组所必需的编码与患者基本字段。
 - **不含支付信息**：不返回费率、支付标准或结算金额。
 - **建议鉴权**：公开部署时请设置 `DRG_MCP_AUTH_TOKEN`，并全链路使用 HTTPS。
